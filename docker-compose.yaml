@@ -1,0 +1,37 @@
+version: '3.7'
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    ports:
+      - "8000:8000"
+
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      DYNAMO_ENDPOINT: "http://dynamodb-local:8000"
+      AWS_REGION: "us-west-2"
+      AWS_ACCESS_KEY_ID: dummy
+      AWS_SECRET_ACCESS_KEY: dummy
+    depends_on:
+      - dynamodb-local
+
+  dynamodb-init:
+    image: amazon/aws-cli
+    depends_on:
+      - dynamodb-local
+    environment:
+      AWS_ACCESS_KEY_ID: dummy
+      AWS_SECRET_ACCESS_KEY: dummy
+      AWS_REGION: us-west-2
+    entrypoint: ["/bin/sh", "-c"]
+    # TODO: Use a more robust way to ensure the local DynamoDB is ready rather than sleep
+    command: >
+      "sleep 5 &&
+       aws dynamodb create-table \
+         --table-name users \
+         --attribute-definitions AttributeName=id,AttributeType=S \
+         --key-schema AttributeName=id,KeyType=HASH \
+         --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
+         --endpoint-url http://dynamodb-local:8000"
