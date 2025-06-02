@@ -8,6 +8,9 @@ pub enum Error {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("missing parameters: {0}")]
+    MissingParameters(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

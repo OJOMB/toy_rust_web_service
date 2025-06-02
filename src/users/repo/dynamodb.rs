@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use super::errors::Error;
 use crate::users::service::idos;
 
+use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_dynamodb::types::AttributeValue;
+use aws_smithy_runtime_api::client::result::SdkError;
 use chrono::{DateTime, NaiveDate, Utc};
 use uuid::{self, Uuid};
 
@@ -80,10 +82,45 @@ impl Repo {
         }
     }
 
-    // pub async fn update_user(&self, user_id: &str, user: &UserUpdateReq) -> Result<(), String> {
-    //     // Implementation for updating a user in DynamoDB
-    //     Ok(())
-    // }
+    pub async fn update_user(&self, user: &idos::User) -> Result<(), Error> {
+        let request = self
+            .client
+            .update_item()
+            .table_name(self.table_name.clone())
+            .key("id".to_string(), AttributeValue::S(user.id.to_string()))
+            .update_expression(
+                "SET first_name = :first_name, last_name = :last_name, email = :email, dob = :dob, updated_at = :updated_at",
+            )
+            // Ensure the item exists before updating to prevent silent creation
+            .condition_expression("attribute_exists(id)")
+            .expression_attribute_values(":first_name", AttributeValue::S(user.first_name.clone()))
+            .expression_attribute_values(":last_name", AttributeValue::S(user.last_name.clone()))
+            .expression_attribute_values(":email", AttributeValue::S(user.email.clone()))
+            .expression_attribute_values(":dob", AttributeValue::S(user.dob.to_string()))
+            .expression_attribute_values(
+                ":updated_at",
+                AttributeValue::S(user.updated_at.to_rfc3339()),
+            );
+
+        let resp = request.send().await;
+        match resp {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("Failed to update user: {:?}", e);
+                match e {
+                    SdkError::ServiceError(service_err) => match service_err.err() {
+                        UpdateItemError::ConditionalCheckFailedException(_) => Err(Error::NotFound),
+                        _ => Err(Error::Internal("unexpected repo error".to_string())),
+                    },
+                    SdkError::TimeoutError(_) => {
+                        tracing::error!("Timeout error while updating user");
+                        Err(Error::Internal("timeout error".to_string()))
+                    }
+                    _ => Err(Error::Internal("unexpected repo error".to_string())),
+                }
+            }
+        }
+    }
 
     // pub async fn delete_user(&self, user_id: &str) -> Result<(), String> {
     //     // Implementation for deleting a user from DynamoDB

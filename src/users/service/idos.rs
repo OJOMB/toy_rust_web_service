@@ -38,4 +38,31 @@ impl User {
             updated_at: DateTime::from_timestamp(0, 0).unwrap(),
         }
     }
+
+    pub fn update(&mut self, update: UserUpdate) {
+        if let Some(first_name) = update.first_name {
+            self.first_name = first_name;
+        }
+
+        if let Some(last_name) = update.last_name {
+            self.last_name = last_name;
+        }
+
+        if let Some(email) = update.email {
+            self.email = email;
+        }
+
+        if let Some(dob) = update.dob {
+            self.dob = dob;
+        }
+
+        self.updated_at = Utc::now();
+    }
+}
+
+pub struct UserUpdate {
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub email: Option<String>,
+    pub dob: Option<NaiveDate>,
 }

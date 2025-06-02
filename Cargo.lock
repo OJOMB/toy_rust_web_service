@@ -2414,6 +2414,7 @@ dependencies = [
  "actix-web",
  "aws-config",
  "aws-sdk-dynamodb",
+ "aws-smithy-runtime-api",
  "chrono",
  "serde",
  "serde_json",

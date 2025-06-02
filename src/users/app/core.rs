@@ -119,7 +119,7 @@ async fn get_user_by_id(
 
 #[put("/{id}")]
 async fn update_user(
-    state: web::Data<State>,
+    service: web::Data<service::core::Service>,
     user_id: web::Path<String>,
     user: web::Json<UserUpdateReq>,
 ) -> impl Responder {
@@ -129,42 +129,15 @@ async fn update_user(
         Err(_) => return HttpResponse::BadRequest().body("Invalid UUID format"),
     };
 
-    let new_user_req: UserUpdateReq = user.into_inner();
-
-    let mut users_guard = state.users.lock().unwrap();
-
-    let existing_user = match users_guard.get(&user_uuid) {
-        Some(user) => user.clone(),
-        None => return HttpResponse::NotFound().body("User not found"),
+    let user_update = match user.into_inner().into_update() {
+        Ok(update) => update,
+        Err(e) => return HttpResponse::BadRequest().body(e),
     };
 
-    let first_name = new_user_req.first_name.unwrap_or(existing_user.first_name);
-    let last_name = new_user_req.last_name.unwrap_or(existing_user.last_name);
-    let email = new_user_req.email.unwrap_or(existing_user.email);
-    let dob = match new_user_req.dob {
-        Some(dob_str) => match parse_date(&dob_str) {
-            Ok(date) => date,
-            Err(e) => {
-                println!("{e}");
-                return HttpResponse::BadRequest().body("could not parse dob");
-            }
-        },
-        None => existing_user.dob, // Use existing user's dob if not provided
-    };
-
-    // Update the user in the hashmap
-    users_guard.insert(
-        user_uuid,
-        service::idos::User::new(first_name, last_name, email, dob),
-    );
-
-    HttpResponse::Ok().content_type("application/json").body(
-        serde_json::to_string(&users_guard.get(&user_uuid).unwrap())
-            .unwrap_or_else(|_| "{}".to_string()),
-    )
-}
-
-fn parse_date(date_str: &str) -> Result<NaiveDate, String> {
-    NaiveDate::parse_from_str(date_str, "%d-%m-%Y")
-        .map_err(|e| format!("Failed to parse date: {}", e))
+    match service.update_user(user_uuid, user_update).await {
+        Ok(updated_user) => HttpResponse::Ok()
+            .content_type("application/json")
+            .body(serde_json::to_string(&updated_user).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => from_service_error(e),
+    }
 }
