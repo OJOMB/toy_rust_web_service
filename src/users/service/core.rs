@@ -46,6 +46,18 @@ impl Service {
         }
     }
 
+    pub async fn get_user_by_email(&self, email: &str) -> Result<User, Error> {
+        if email.is_empty() {
+            tracing::error!("missing email");
+            return Err(Error::Validation("email must be populated".to_string()));
+        }
+
+        match self.repo.get_user_by_email(email).await {
+            Ok(user) => Ok(user),
+            Err(e) => Err(Error::from_repo_error(e)),
+        }
+    }
+
     pub async fn update_user(&self, id: Uuid, update: UserUpdate) -> Result<User, Error> {
         if id.is_nil() {
             tracing::error!("missing uuid");
@@ -72,6 +84,18 @@ impl Service {
 
         match self.repo.update_user(&user).await {
             Ok(_) => Ok(user),
+            Err(e) => Err(Error::from_repo_error(e)),
+        }
+    }
+
+    pub async fn delete_user(&self, id: Uuid) -> Result<(), Error> {
+        if id.is_nil() {
+            tracing::error!("missing uuid");
+            return Err(Error::Validation("user id must be populated".to_string()));
+        }
+
+        match self.repo.delete_user(id).await {
+            Ok(_) => Ok(()),
             Err(e) => Err(Error::from_repo_error(e)),
         }
     }

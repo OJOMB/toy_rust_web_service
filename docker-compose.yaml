@@ -28,10 +28,16 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     # TODO: Use a more robust way to ensure the local DynamoDB is ready rather than sleep
     command: >
-      "sleep 5 &&
-       aws dynamodb create-table \
-         --table-name users \
-         --attribute-definitions AttributeName=id,AttributeType=S \
-         --key-schema AttributeName=id,KeyType=HASH \
-         --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
-         --endpoint-url http://dynamodb-local:8000"
+      "sleep 3 &&
+        aws dynamodb create-table \
+          --table-name users \
+          --attribute-definitions AttributeName=id,AttributeType=S \
+          --key-schema AttributeName=id,KeyType=HASH \
+          --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
+          --endpoint-url http://dynamodb-local:8000 &&
+        aws dynamodb create-table \
+          --table-name users_email_lookup \
+          --attribute-definitions AttributeName=email,AttributeType=S \
+          --key-schema AttributeName=email,KeyType=HASH \
+          --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+          --endpoint-url http://dynamodb-local:8000"

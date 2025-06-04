@@ -1,9 +1,9 @@
-use super::dtos::{UserCreationReq, UserUpdateReq};
+use super::dtos::{QueryUser, ReqUserCreation, ReqUserUpdate};
 use super::errors::from_service_error;
 use super::state::State;
 use crate::users::service;
 
-use actix_web::{HttpResponse, Responder, get, post, put, web};
+use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use chrono::NaiveDate;
 use uuid;
 
@@ -24,7 +24,7 @@ impl App {
     }
 
     pub fn configure(&self) -> impl FnOnce(&mut web::ServiceConfig) + Clone {
-        let scope = self.scope.clone();
+        let scope: String = self.scope.clone();
         let state = self.state.clone();
         let service = self.service.clone();
 
@@ -33,38 +33,22 @@ impl App {
                 web::scope(&scope)
                     .app_data(web::Data::new(state))
                     .app_data(web::Data::new(service))
-                    .service(get_all_users)
                     .service(create_user)
                     .service(get_user_by_id)
-                    .service(update_user),
+                    .service(get_user_by_email)
+                    .service(update_user)
+                    .service(delete_user),
             );
         }
     }
 }
 
-#[get("/")]
-async fn get_all_users(state: web::Data<State>) -> impl Responder {
-    // Lock the mutex to access the users hashmap
-    let users_guard = state.users.lock().unwrap();
-    let users: Vec<&service::idos::User> = users_guard.values().collect();
-    if users.is_empty() {
-        return HttpResponse::NotFound().body("No users found");
-    }
-
-    // Convert users to JSON and return
-    let users_json = serde_json::to_string(&users).unwrap_or_else(|_| "[]".to_string());
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .body(users_json)
-}
-
-#[post("/")]
+#[post("")]
 async fn create_user(
     service: web::Data<service::core::Service>,
-    user: web::Json<UserCreationReq>,
+    user: web::Json<ReqUserCreation>,
 ) -> impl Responder {
-    let new_user_req: UserCreationReq = user.into_inner();
+    let new_user_req: ReqUserCreation = user.into_inner();
 
     let parsed_dob = NaiveDate::parse_from_str(&new_user_req.dob, "%d-%m-%Y");
     match parsed_dob {
@@ -88,7 +72,7 @@ async fn create_user(
         Ok(user) => user,
         Err(e) => {
             println!("Failed to create user: {}", e);
-            return HttpResponse::InternalServerError().body("Failed to create user");
+            return from_service_error(e);
         }
     };
 
@@ -117,11 +101,31 @@ async fn get_user_by_id(
     }
 }
 
+#[get("")]
+async fn get_user_by_email(
+    service: web::Data<service::core::Service>,
+    email: web::Query<QueryUser>,
+) -> impl Responder {
+    let email_str_opt = email.into_inner().email;
+
+    let email_str = match email_str_opt {
+        Some(email) => email,
+        None => return HttpResponse::BadRequest().body("Email query parameter is required"),
+    };
+
+    match service.get_user_by_email(&email_str).await {
+        Ok(user) => HttpResponse::Ok()
+            .content_type("application/json")
+            .body(serde_json::to_string(&user).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => from_service_error(e),
+    }
+}
+
 #[put("/{id}")]
 async fn update_user(
     service: web::Data<service::core::Service>,
     user_id: web::Path<String>,
-    user: web::Json<UserUpdateReq>,
+    user: web::Json<ReqUserUpdate>,
 ) -> impl Responder {
     let user_uuid_str = &user_id.into_inner();
     let user_uuid = match uuid::Uuid::parse_str(user_uuid_str) {
@@ -138,6 +142,23 @@ async fn update_user(
         Ok(updated_user) => HttpResponse::Ok()
             .content_type("application/json")
             .body(serde_json::to_string(&updated_user).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => from_service_error(e),
+    }
+}
+
+#[delete("/{id}")]
+async fn delete_user(
+    service: web::Data<service::core::Service>,
+    user_id: web::Path<String>,
+) -> impl Responder {
+    let user_uuid_str = &user_id.into_inner();
+    let user_uuid = match uuid::Uuid::parse_str(user_uuid_str) {
+        Ok(uuid) => uuid,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid UUID format"),
+    };
+
+    match service.delete_user(user_uuid).await {
+        Ok(_) => HttpResponse::NoContent().finish(),
         Err(e) => from_service_error(e),
     }
 }

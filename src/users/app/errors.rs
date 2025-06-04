@@ -1,4 +1,4 @@
-use crate::users::service;
+use crate::users::service::errors;
 use actix_web::HttpResponse;
 use serde::Serialize;
 
@@ -7,27 +7,38 @@ struct Error {
     message: String,
 }
 
-pub fn from_service_error(service_err: service::errors::Error) -> HttpResponse {
-    match service_err {
-        service::errors::Error::NotFound => {
+pub fn from_service_error(svc_err: errors::Error) -> HttpResponse {
+    match svc_err {
+        errors::Error::NotFound => {
             let err = Error {
-                message: service_err.to_string(),
+                message: svc_err.to_string(),
             };
 
             HttpResponse::NotFound()
                 .content_type("application/json")
                 .body(serde_json::to_string(&err).unwrap_or_else(|_| "{}".to_string()))
         }
-        service::errors::Error::Validation(e) => {
+        errors::Error::Validation(e) | errors::Error::MissingParameters(e) => {
             let err = Error { message: e };
 
             HttpResponse::BadRequest()
                 .content_type("application/json")
                 .body(serde_json::to_string(&err).unwrap_or_else(|_| "{}".to_string()))
         }
-        _ => {
+        errors::Error::ConflictingUser(_) => {
             let err = Error {
-                message: "An unexpected error occurred".to_string(),
+                message: svc_err.to_string(),
+            };
+
+            HttpResponse::Conflict()
+                .content_type("application/json")
+                .body(serde_json::to_string(&err).unwrap_or_else(|_| "{}".to_string()))
+        }
+        _ => {
+            tracing::error!("Unhandled service error: {:?}", svc_err);
+
+            let err = Error {
+                message: format!("Internal error"),
             };
 
             HttpResponse::InternalServerError()
