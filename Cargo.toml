@@ -16,3 +16,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "json", "env-filter"] }
 thiserror = "2.0.12"
 aws-smithy-runtime-api = "1.8.0"
+async-trait = "0.1"

@@ -1,28 +1,37 @@
 use super::errors::Error;
 use super::idos::{User, UserUpdate};
+use crate::users::app::core::Service as AppService;
+use crate::users::repo::errors::Error as RepoError;
+
 use uuid::Uuid;
 
-use crate::users::repo;
+#[async_trait::async_trait]
+pub trait Repo: Send + Sync + Clone + 'static {
+    async fn create_user(&self, user: &User) -> Result<(), RepoError>;
 
-// pub trait Repo {
-//     // fn get_user(&self, user_id: &str) -> Result<idos::User, String>;
-//     async fn create_user(&self, user: idos::User) -> Result<idos::User, String>;
-//     // fn update_user(&self, user_id: &str, user: idos::User) -> Result<idos::User, String>;
-//     // fn delete_user(&self, user_id: &str) -> Result<(), String>;
-//     // fn list_users(&self) -> Result<Vec<idos::User>, String>;
-// }
+    async fn get_user(&self, id: Uuid) -> Result<User, RepoError>;
 
-#[derive(Clone)]
-pub struct Service {
-    repo: repo::dynamodb::Repo,
+    async fn get_user_by_email(&self, email: &str) -> Result<User, RepoError>;
+
+    async fn update_user(&self, user: &User) -> Result<(), RepoError>;
+
+    async fn delete_user(&self, id: Uuid) -> Result<(), RepoError>;
 }
 
-impl Service {
-    pub fn new(repo: repo::dynamodb::Repo) -> Self {
+#[derive(Clone)]
+pub struct Service<R: Repo> {
+    repo: R,
+}
+
+impl<R: Repo> Service<R> {
+    pub fn new(repo: R) -> Self {
         Self { repo }
     }
+}
 
-    pub async fn create_user(&self, user: User) -> Result<User, Error> {
+#[async_trait::async_trait]
+impl<R: Repo> AppService for Service<R> {
+    async fn create_user(&self, user: User) -> Result<User, Error> {
         if user.id.is_nil() {
             tracing::error!("missing uuid");
             return Err(Error::Validation("user id must be populated".to_string()));
@@ -34,7 +43,7 @@ impl Service {
         }
     }
 
-    pub async fn get_user(&self, id: Uuid) -> Result<User, Error> {
+    async fn get_user(&self, id: Uuid) -> Result<User, Error> {
         if id.is_nil() {
             tracing::error!("missing uuid");
             return Err(Error::Validation("user id must be populated".to_string()));
@@ -46,7 +55,7 @@ impl Service {
         }
     }
 
-    pub async fn get_user_by_email(&self, email: &str) -> Result<User, Error> {
+    async fn get_user_by_email(&self, email: &str) -> Result<User, Error> {
         if email.is_empty() {
             tracing::error!("missing email");
             return Err(Error::Validation("email must be populated".to_string()));
@@ -58,7 +67,7 @@ impl Service {
         }
     }
 
-    pub async fn update_user(&self, id: Uuid, update: UserUpdate) -> Result<User, Error> {
+    async fn update_user(&self, id: Uuid, update: UserUpdate) -> Result<User, Error> {
         if id.is_nil() {
             tracing::error!("missing uuid");
             return Err(Error::Validation("user id must be populated".to_string()));
@@ -88,7 +97,7 @@ impl Service {
         }
     }
 
-    pub async fn delete_user(&self, id: Uuid) -> Result<(), Error> {
+    async fn delete_user(&self, id: Uuid) -> Result<(), Error> {
         if id.is_nil() {
             tracing::error!("missing uuid");
             return Err(Error::Validation("user id must be populated".to_string()));

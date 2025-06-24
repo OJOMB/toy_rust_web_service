@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_web::middleware::NormalizePath;
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -34,9 +36,8 @@ async fn main() -> std::io::Result<()> {
     let email_lookup_table_name = "users_email_lookup".to_string();
 
     let repo = users::repo::dynamodb::Repo::new(client, table_name, email_lookup_table_name);
-
     let users_service = users::service::core::Service::new(repo);
-    let users_app = users::app::core::App::new("/api/users".to_string(), users_service);
+    let users_app = users::app::core::App::new("/api/users".to_string(), Arc::new(users_service));
 
     HttpServer::new(move || {
         App::new()

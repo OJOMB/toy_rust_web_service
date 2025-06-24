@@ -2,37 +2,60 @@ use super::dtos::{QueryUser, ReqUserCreation, ReqUserUpdate};
 use super::errors::from_service_error;
 use super::state::State;
 use crate::users::service;
+use crate::users::service::errors::Error as ServiceError;
+
+use std::sync::Arc;
 
 use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use chrono::NaiveDate;
-use uuid;
+use uuid::Uuid;
+
+#[async_trait::async_trait]
+pub trait Service: Send + Sync + 'static {
+    async fn create_user(
+        &self,
+        user: service::idos::User,
+    ) -> Result<service::idos::User, ServiceError>;
+
+    async fn get_user(&self, id: Uuid) -> Result<service::idos::User, ServiceError>;
+
+    async fn get_user_by_email(&self, email: &str) -> Result<service::idos::User, ServiceError>;
+
+    async fn update_user(
+        &self,
+        id: Uuid,
+        update: service::idos::UserUpdate,
+    ) -> Result<service::idos::User, ServiceError>;
+
+    async fn delete_user(&self, id: Uuid) -> Result<(), ServiceError>;
+}
 
 #[derive(Clone)]
 pub struct App {
     scope: String,
     state: State,
-    service: service::core::Service,
+    service: Arc<dyn Service>,
 }
 
 impl App {
-    pub fn new(scope: String, service: service::core::Service) -> Self {
+    pub fn new(scope: String, service: Arc<dyn Service>) -> Self {
         Self {
             scope,
             state: State::new(),
-            service,
+            service: service,
         }
     }
 
     pub fn configure(&self) -> impl FnOnce(&mut web::ServiceConfig) + Clone {
-        let scope: String = self.scope.clone();
+        let scope = self.scope.clone();
         let state = self.state.clone();
-        let service = self.service.clone();
+        let service: Arc<dyn Service + 'static> = self.service.clone();
 
         move |cfg: &mut web::ServiceConfig| {
             cfg.service(
                 web::scope(&scope)
                     .app_data(web::Data::new(state))
-                    .app_data(web::Data::new(service))
+                    .app_data::<actix_web::web::Data<Arc<dyn Service>>>(web::Data::new(service))
                     .service(create_user)
                     .service(get_user_by_id)
                     .service(get_user_by_email)
@@ -45,12 +68,12 @@ impl App {
 
 #[post("")]
 async fn create_user(
-    service: web::Data<service::core::Service>,
+    service: web::Data<Arc<dyn Service>>,
     user: web::Json<ReqUserCreation>,
 ) -> impl Responder {
     let new_user_req: ReqUserCreation = user.into_inner();
 
-    let parsed_dob = NaiveDate::parse_from_str(&new_user_req.dob, "%d-%m-%Y");
+    let parsed_dob = NaiveDate::parse_from_str(&new_user_req.dob, "%Y-%m-%d");
     match parsed_dob {
         Err(e) => {
             println!("Failed to parse date: {}", e);
@@ -83,7 +106,7 @@ async fn create_user(
 
 #[get("/{id}")]
 async fn get_user_by_id(
-    service: web::Data<service::core::Service>,
+    service: web::Data<Arc<dyn Service>>,
     user_id: web::Path<String>,
 ) -> impl Responder {
     // this next step can fail if the string provided is not a valid uuid
@@ -103,7 +126,7 @@ async fn get_user_by_id(
 
 #[get("")]
 async fn get_user_by_email(
-    service: web::Data<service::core::Service>,
+    service: web::Data<Arc<dyn Service>>,
     email: web::Query<QueryUser>,
 ) -> impl Responder {
     let email_str_opt = email.into_inner().email;
@@ -123,7 +146,7 @@ async fn get_user_by_email(
 
 #[put("/{id}")]
 async fn update_user(
-    service: web::Data<service::core::Service>,
+    service: web::Data<Arc<dyn Service>>,
     user_id: web::Path<String>,
     user: web::Json<ReqUserUpdate>,
 ) -> impl Responder {
@@ -148,7 +171,7 @@ async fn update_user(
 
 #[delete("/{id}")]
 async fn delete_user(
-    service: web::Data<service::core::Service>,
+    service: web::Data<Arc<dyn Service>>,
     user_id: web::Path<String>,
 ) -> impl Responder {
     let user_uuid_str = &user_id.into_inner();

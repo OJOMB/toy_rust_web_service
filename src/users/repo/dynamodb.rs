@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::errors::Error;
+use crate::users::service;
 use crate::users::service::idos;
 
 use aws_sdk_dynamodb::operation::{
@@ -32,8 +33,9 @@ impl Repo {
     }
 }
 
-impl Repo {
-    pub async fn get_user(&self, id: Uuid) -> Result<idos::User, Error> {
+#[async_trait::async_trait]
+impl service::core::Repo for Repo {
+    async fn get_user(&self, id: Uuid) -> Result<idos::User, Error> {
         let request = self
             .client
             .get_item()
@@ -53,7 +55,7 @@ impl Repo {
         }
     }
 
-    pub async fn get_user_by_email(&self, email: &str) -> Result<idos::User, Error> {
+    async fn get_user_by_email(&self, email: &str) -> Result<idos::User, Error> {
         // email is a unique identifier in our system, so we can use it to look up the user
         let request = self
             .client
@@ -106,7 +108,7 @@ impl Repo {
         }
     }
 
-    pub async fn create_user(&self, user: &idos::User) -> Result<(), Error> {
+    async fn create_user(&self, user: &idos::User) -> Result<(), Error> {
         // first we attempt to create an entry in the lookup table under the condition that the given email does not already exist
         // this serves as both a check to ensure that we do not have duplicate emails in the system and as a way to create a lookup entry for the user
         // if the email already exists, we will get a ConditionalCheckFailedException
@@ -209,7 +211,7 @@ impl Repo {
         }
     }
 
-    pub async fn update_user(&self, user: &idos::User) -> Result<(), Error> {
+    async fn update_user(&self, user: &idos::User) -> Result<(), Error> {
         let request = self
             .client
             .update_item()
@@ -249,7 +251,7 @@ impl Repo {
         }
     }
 
-    pub async fn delete_user(&self, id: Uuid) -> Result<(), Error> {
+    async fn delete_user(&self, id: Uuid) -> Result<(), Error> {
         let request = self
             .client
             .delete_item()

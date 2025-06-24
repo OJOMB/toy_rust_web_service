@@ -27,18 +27,6 @@ impl User {
         }
     }
 
-    pub fn new_dummy() -> Self {
-        User {
-            id: Uuid::from_u128(0),
-            first_name: "John".to_string(),
-            last_name: "Doe".to_string(),
-            email: "jd@example.com".to_string(),
-            dob: NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
-            created_at: DateTime::from_timestamp(0, 0).unwrap(),
-            updated_at: DateTime::from_timestamp(0, 0).unwrap(),
-        }
-    }
-
     pub fn update(&mut self, update: UserUpdate) {
         if let Some(first_name) = update.first_name {
             self.first_name = first_name;
