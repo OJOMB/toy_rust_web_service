@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use actix_web::middleware::NormalizePath;
-use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
+use actix_web::web::{self, JsonConfig};
+use actix_web::{App, HttpResponse, HttpServer, Responder, get};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 mod users;
@@ -46,6 +47,7 @@ async fn main() -> std::io::Result<()> {
                 app_name: "My Actix Web App".to_string(),
                 version: "1.0.0".to_string(),
             }))
+            .app_data(JsonConfig::default().error_handler(users::app::errors::json_error_handler))
             .configure(users_app.configure())
             .service(health_check)
     })

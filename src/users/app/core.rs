@@ -10,6 +10,8 @@ use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use chrono::NaiveDate;
 use uuid::Uuid;
 
+// TODO: currently we have a God trait that encapsulates all service methods - forces clients to violate Interface Segregation Principle
+// maybe should figure out an approach that breaks this trait up
 #[async_trait::async_trait]
 pub trait Service: Send + Sync + 'static {
     async fn create_user(
@@ -113,7 +115,16 @@ async fn get_user_by_id(
     let user_uuid_str: &String = &user_id.into_inner();
     let user_uuid = match uuid::Uuid::parse_str(user_uuid_str) {
         Ok(uuid) => uuid,
-        Err(_) => return HttpResponse::BadRequest().body("Invalid UUID format"),
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .content_type("application/json")
+                .body({
+                    serde_json::to_string(&serde_json::json!({
+                        "message": "Invalid UUID format"
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string())
+                });
+        }
     };
 
     match service.get_user(user_uuid).await {

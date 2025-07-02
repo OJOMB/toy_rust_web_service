@@ -14,8 +14,8 @@ pub enum Error {
     #[error("conflicting user: {0}")]
     ConflictingUser(String),
 
-    #[error("internal error: {0}")]
-    Internal(String),
+    #[error("internal error")]
+    Internal,
 }
 
 impl Error {
@@ -24,8 +24,8 @@ impl Error {
             repo::errors::Error::NotFound => Error::NotFound,
             repo::errors::Error::Validation(e) => Error::Validation(e),
             repo::errors::Error::EmailAddressAlreadyInUse(e) => Error::ConflictingUser(e),
-            repo::errors::Error::Internal(e) | repo::errors::Error::MalformedResponse(e) => {
-                Error::Internal(e)
+            repo::errors::Error::Internal | repo::errors::Error::MalformedResponse(_) => {
+                Error::Internal
             }
         }
     }

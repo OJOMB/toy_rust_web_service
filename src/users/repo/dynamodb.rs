@@ -4,31 +4,32 @@ use super::errors::Error;
 use crate::users::service;
 use crate::users::service::idos;
 
-use aws_sdk_dynamodb::operation::{
-    delete_item::DeleteItemError, put_item::PutItemError, update_item::UpdateItemError,
+use aws_sdk_dynamodb::operation::{delete_item::DeleteItemError, put_item::PutItemError};
+
+use aws_sdk_dynamodb::{
+    Client,
+    error::SdkError,
+    operation::transact_write_items::TransactWriteItemsError::TransactionCanceledException,
+    types::{AttributeValue, Delete, Put, TransactWriteItem},
 };
-use aws_sdk_dynamodb::types::AttributeValue;
-use aws_smithy_runtime_api::client::result::SdkError;
 use chrono::{DateTime, NaiveDate, Utc};
 use uuid::{self, Uuid};
 
+const OPERATION_LABELS: [&str; 3] = ["delete_old_email_with_check", "put_new_email", "put_user"];
+
 #[derive(Clone)]
 pub struct Repo {
-    client: aws_sdk_dynamodb::Client,
+    client: Client,
     table_name: String,
-    lookup_table_name: String,
+    email_lookup_table_name: String,
 }
 
 impl Repo {
-    pub fn new(
-        client: aws_sdk_dynamodb::Client,
-        table_name: String,
-        lookup_table_name: String,
-    ) -> Self {
+    pub fn new(client: Client, table_name: String, email_lookup_table_name: String) -> Self {
         Self {
             client,
             table_name,
-            lookup_table_name,
+            email_lookup_table_name,
         }
     }
 }
@@ -50,7 +51,7 @@ impl service::core::Repo for Repo {
             },
             Err(e) => {
                 println!("{:?}", e);
-                return Err(Error::Internal("unexpected repo error".to_string()));
+                return Err(Error::Internal);
             }
         }
     }
@@ -60,7 +61,7 @@ impl service::core::Repo for Repo {
         let request = self
             .client
             .get_item()
-            .table_name(self.lookup_table_name.clone())
+            .table_name(self.email_lookup_table_name.clone())
             .key("email".to_string(), AttributeValue::S(email.to_string()));
 
         let resp = request.send().await;
@@ -86,7 +87,7 @@ impl service::core::Repo for Repo {
                                 }
                                 Err(e) => {
                                     tracing::error!("Error fetching user: {}", e);
-                                    Err(Error::Internal("unexpected repo error".to_string()))
+                                    Err(Error::Internal)
                                 }
                             }
                         }
@@ -103,7 +104,7 @@ impl service::core::Repo for Repo {
             },
             Err(e) => {
                 println!("{:?}", e);
-                return Err(Error::Internal("unexpected repo error".to_string()));
+                return Err(Error::Internal);
             }
         }
     }
@@ -115,7 +116,7 @@ impl service::core::Repo for Repo {
         let lookup_request = self
             .client
             .put_item()
-            .table_name(self.lookup_table_name.clone())
+            .table_name(self.email_lookup_table_name.clone())
             .item("id".to_string(), AttributeValue::S(user.id.to_string()))
             .item("email".to_string(), AttributeValue::S(user.email.clone()))
             .condition_expression("attribute_not_exists(email)");
@@ -140,12 +141,12 @@ impl service::core::Repo for Repo {
                     }
                     _ => {
                         tracing::error!("Unexpected error occurred: {:?}", e);
-                        return Err(Error::Internal("unexpected repo error".to_string()));
+                        return Err(Error::Internal);
                     }
                 },
                 _ => {
                     tracing::error!("Unexpected error occurred: {:?}", e);
-                    return Err(Error::Internal("unexpected repo error".to_string()));
+                    return Err(Error::Internal);
                 }
             },
         }
@@ -189,7 +190,7 @@ impl service::core::Repo for Repo {
                 let rollback_request = self
                     .client
                     .delete_item()
-                    .table_name(self.lookup_table_name.clone())
+                    .table_name(self.email_lookup_table_name.clone())
                     .key("id".to_string(), AttributeValue::S(user.id.to_string()));
 
                 let rollback_resp = rollback_request.send().await;
@@ -206,47 +207,171 @@ impl service::core::Repo for Repo {
                     );
                 }
 
-                return Err(Error::Internal("unexpected repo error".to_string()));
+                return Err(Error::Internal);
             }
         }
     }
 
-    async fn update_user(&self, user: &idos::User) -> Result<(), Error> {
-        let request = self
-            .client
-            .update_item()
-            .table_name(self.table_name.clone())
-            .key("id".to_string(), AttributeValue::S(user.id.to_string()))
-            .update_expression(
-                "SET first_name = :first_name, last_name = :last_name, email = :email, dob = :dob, updated_at = :updated_at",
-            )
-            // Ensure the item exists before updating to prevent silent creation
-            .condition_expression("attribute_exists(id)")
-            .expression_attribute_values(":first_name", AttributeValue::S(user.first_name.clone()))
-            .expression_attribute_values(":last_name", AttributeValue::S(user.last_name.clone()))
-            .expression_attribute_values(":email", AttributeValue::S(user.email.clone()))
-            .expression_attribute_values(":dob", AttributeValue::S(user.dob.to_string()))
-            .expression_attribute_values(
-                ":updated_at",
-                AttributeValue::S(user.updated_at.to_rfc3339()),
-            );
+    async fn update_user(
+        &self,
+        user: &idos::User,
+        old_user_email: Option<String>,
+    ) -> Result<(), Error> {
+        let mut tx_write_items: Vec<TransactWriteItem> = vec![];
 
-        let resp = request.send().await;
-        match resp {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                tracing::error!("Failed to update user: {:?}", e);
-                match e {
-                    SdkError::ServiceError(service_err) => match service_err.err() {
-                        UpdateItemError::ConditionalCheckFailedException(_) => Err(Error::NotFound),
-                        _ => Err(Error::Internal("unexpected repo error".to_string())),
-                    },
-                    SdkError::TimeoutError(_) => {
-                        tracing::error!("Timeout error while updating user");
-                        Err(Error::Internal("timeout error".to_string()))
+        // old_user_email is None if the email has not changed
+        if let Some(old_email) = old_user_email.clone() {
+            // outside the tx we perform a pre-write lookup
+            let old_email_lookup_record = self
+                .client
+                .get_item()
+                .table_name(self.email_lookup_table_name.clone())
+                .key("email", AttributeValue::S(old_email.to_string()))
+                .send()
+                .await;
+
+            match old_email_lookup_record {
+                Ok(get_item_output) => {
+                    let attrs = match get_item_output.item() {
+                        Some(attrs) => attrs,
+                        None => {
+                            tracing::error!(
+                                "Old email lookup record not found for email: {}, user ID: {}",
+                                old_email,
+                                user.id
+                            );
+
+                            return Err(Error::Internal);
+                        }
+                    };
+
+                    let id = get_string(attrs, "id")?;
+                    if id != user.id.to_string() {
+                        return Err(Error::EmailAddressAlreadyInUse(
+                            "a user with the provided email already exists".to_string(),
+                        ));
                     }
-                    _ => Err(Error::Internal("unexpected repo error".to_string())),
                 }
+                Err(_) => {
+                    tracing::error!(
+                        "Failed to retrieve old email lookup record for email: {}, user ID: {}",
+                        old_email,
+                        user.id
+                    );
+                    return Err(Error::Internal);
+                }
+            }
+
+            let delete_old_email_with_check: TransactWriteItem = TransactWriteItem::builder()
+                .delete(
+                    Delete::builder()
+                        .table_name(self.email_lookup_table_name.clone())
+                        .key("email", AttributeValue::S(old_email.to_string()))
+                        .expression_attribute_values(":id", AttributeValue::S(user.id.to_string()))
+                        .build()
+                        .unwrap(),
+                )
+                .build();
+
+            tx_write_items.push(delete_old_email_with_check);
+
+            let put_new_email = TransactWriteItem::builder()
+                .put(
+                    Put::builder()
+                        .table_name(self.email_lookup_table_name.clone())
+                        .item("email", AttributeValue::S(user.email.to_string()))
+                        .item("id", AttributeValue::S(user.id.to_string()))
+                        .condition_expression("attribute_not_exists(email)")
+                        .build()
+                        .unwrap(),
+                )
+                .build();
+
+            tx_write_items.push(put_new_email);
+        }
+
+        let put_user = TransactWriteItem::builder()
+            .put(
+                Put::builder()
+                    .table_name(self.table_name.clone())
+                    .item("id", AttributeValue::S(user.id.to_string()))
+                    .item("email", AttributeValue::S(user.email.to_string()))
+                    .item("first_name", AttributeValue::S(user.first_name.clone()))
+                    .item("last_name", AttributeValue::S(user.last_name.clone()))
+                    .item("dob", AttributeValue::S(user.dob.to_string()))
+                    .item(
+                        "updated_at",
+                        AttributeValue::S(user.updated_at.to_rfc3339()),
+                    )
+                    .condition_expression("attribute_exists(id)") // Ensure the item exists before updating to prevent silent creation
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        tx_write_items.push(put_user);
+
+        let result = self
+            .client
+            .transact_write_items()
+            .set_transact_items(Some(tx_write_items))
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(SdkError::ServiceError(svc_err)) => {
+                tracing::error!("Blud Transaction failed");
+                match svc_err.err() {
+                    TransactionCanceledException(e) => {
+                        tracing::error!("Transaction was cancelled: {:?}", svc_err);
+
+                        for (i, maybe_reason) in e.cancellation_reasons().iter().enumerate() {
+                            if let Some(reason) = maybe_reason.code.clone() {
+                                let op = OPERATION_LABELS.get(i).unwrap_or(&"unknown op");
+                                let msg = maybe_reason.message().unwrap_or("no message");
+                                tracing::error!(
+                                    "Step {} - op: {} failed: [{}] {}",
+                                    i + 1,
+                                    op,
+                                    reason,
+                                    msg
+                                );
+
+                                let _cond_check_failed = "ConditionalCheckFailed";
+                                match (*op, reason.as_str()) {
+                                    ("put_new_email", _cond_check_failed) => {
+                                        return Err(Error::EmailAddressAlreadyInUse(
+                                            "a user with the provided email already exists"
+                                                .to_string(),
+                                        ));
+                                    }
+                                    ("put_user", _cond_check_failed) => {
+                                        return Err(Error::NotFound);
+                                    }
+                                    (op, reason) => {
+                                        tracing::error!(
+                                            "Unhandled operation {} with reason: {}",
+                                            op,
+                                            reason
+                                        );
+                                        return Err(Error::Internal);
+                                    }
+                                }
+                            }
+                        }
+
+                        return Err(Error::Internal);
+                    }
+                    _ => {
+                        tracing::error!("Unexpected error occurred: {:?}", svc_err);
+                        return Err(Error::Internal);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Non-service error: {:?}", e);
+                return Err(Error::Internal);
             }
         }
     }
@@ -266,13 +391,13 @@ impl service::core::Repo for Repo {
                 match e {
                     SdkError::ServiceError(service_err) => match service_err.err() {
                         DeleteItemError::ConditionalCheckFailedException(_) => Err(Error::NotFound),
-                        _ => Err(Error::Internal("unexpected repo error".to_string())),
+                        _ => Err(Error::Internal),
                     },
                     SdkError::TimeoutError(_) => {
                         tracing::error!("Timeout error while updating user");
-                        Err(Error::Internal("timeout error".to_string()))
+                        Err(Error::Internal)
                     }
-                    _ => Err(Error::Internal("unexpected repo error".to_string())),
+                    _ => Err(Error::Internal),
                 }
             }
         }

@@ -12,6 +12,6 @@ pub enum Error {
     #[error("email address already in use: {0}")]
     EmailAddressAlreadyInUse(String),
 
-    #[error("internal error: {0}")]
-    Internal(String),
+    #[error("internal error")]
+    Internal,
 }

@@ -13,7 +13,11 @@ pub trait Repo: Send + Sync + Clone + 'static {
 
     async fn get_user_by_email(&self, email: &str) -> Result<User, RepoError>;
 
-    async fn update_user(&self, user: &User) -> Result<(), RepoError>;
+    async fn update_user(
+        &self,
+        user: &User,
+        old_user_email: Option<String>,
+    ) -> Result<(), RepoError>;
 
     async fn delete_user(&self, id: Uuid) -> Result<(), RepoError>;
 }
@@ -89,9 +93,20 @@ impl<R: Repo> AppService for Service<R> {
             Err(e) => return Err(Error::from_repo_error(e)),
         };
 
+        let old_user_email = match &update.email {
+            Some(new_email) => {
+                if !new_email.is_empty() && *new_email != user.email {
+                    Some(user.email.clone())
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
         user.update(update);
 
-        match self.repo.update_user(&user).await {
+        match self.repo.update_user(&user, old_user_email).await {
             Ok(_) => Ok(user),
             Err(e) => Err(Error::from_repo_error(e)),
         }
